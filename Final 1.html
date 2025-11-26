@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OCR Scanner App — Front & Rear Camera</title>
+<style>
+body { font-family: Arial; background:#0f172a; color:white; margin:0; padding:0; text-align:center; }
+nav { display:flex; justify-content:space-around; background:#1e293b; padding:12px; }
+nav button { background:#3b82f6; border:none; color:white; padding:10px 16px; border-radius:6px; cursor:pointer; }
+.page { display:none; padding:20px; }
+.active { display:block; }
+#preview, #cameraPreview { width:90%; max-width:300px; border-radius:10px; margin-top:15px; }
+#resultBox { margin-top:20px; background:#1e293b; padding:15px; border-radius:10px; white-space:pre-wrap; }
+#savePopup { position: fixed; bottom:20px; right:20px; background:#4caf50; color:white; padding:12px 18px; border-radius:8px; display:none; font-size:16px; }
+</style>
+</head>
+<body>
+
+<nav>
+    <button onclick="showPage('homePage')">Home</button>
+    <button onclick="showPage('scanPage')">Scan</button>
+    <button onclick="showPage('historyPage')">History</button>
+</nav>
+
+<!-- HOME PAGE -->
+<div id="homePage" class="page active">
+    <h1>📄 OCR Scanner App</h1>
+    <p>Upload / Capture → OCR → Save → View History</p>
+</div>
+
+<!-- SCAN PAGE -->
+<div id="scanPage" class="page">
+    <h2>OCR Scanner</h2>
+    <input type="file" id="fileInput" accept="image/*" class="btn"><br><br>
+    <button onclick="openCamera('environment')" class="btn">📷 Rear Camera</button>
+    <button onclick="openCamera('user')" class="btn">📷 Front Camera</button>
+    <video id="cameraPreview" autoplay playsinline style="display:none;"></video>
+    <canvas id="cameraCanvas" style="display:none;"></canvas>
+    <img id="preview" style="display:none;">
+    <button onclick="startOCR()" class="btn">Extract Text</button>
+    <div id="resultBox" style="display:none;"></div>
+</div>
+
+<!-- HISTORY PAGE -->
+<div id="historyPage" class="page">
+    <h2>Saved OCR History</h2>
+    <div id="historyList">Loading...</div>
+</div>
+
+<div id="savePopup">Saved to Firebase!</div>
+
+<!-- Tesseract -->
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.0.1/dist/tesseract.min.js"></script>
+
+<!-- Firebase -->
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getFirestore, collection, addDoc, getDocs, query, orderBy } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+const firebaseConfig = {
+    apiKey: "AIzaSyD69D9mpeIdbGTWVKTlb7QD0EQdE3p7KSM",
+    authDomain: "my-ocr-c7d74.firebaseapp.com",
+    projectId: "my-ocr-c7d74",
+    storageBucket: "my-ocr-c7d74.appspot.com",
+    messagingSenderId: "306025938236",
+    appId: "1:306025938236:web:3c95f72627c89f87f6f239",
+    measurementId: "G-9N780BCMPZ"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+
+window.saveToFirebase = async function(text){
+    if(!text) return;
+    try {
+        await addDoc(collection(db, "ocr_texts"), {
+            text: text,
+            time: new Date()
+        });
+        showPopup();      // show the popup message
+        loadHistory();    // refresh history
+    } catch(err) {
+        alert("Failed to save: " + err.message);
+    }
+};
+
+window.loadHistory = async function(){
+    const list = document.getElementById("historyList");
+    list.innerHTML = "Loading...";
+    const q = query(collection(db, "ocr_texts"), orderBy("time","desc"));
+    const querySnapshot = await getDocs(q);
+    if(querySnapshot.empty){ list.innerHTML="No history found."; return; }
+    let html="";
+    querySnapshot.forEach(doc => {
+        html += `<div style='background:#1e293b;margin:10px;padding:12px;border-radius:8px;'>${doc.data().text}</div>`;
+    });
+    list.innerHTML = html;
+};
+loadHistory();
+</script>
+
+<script>
+function showPage(id){
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    document.getElementById(id).classList.add('active');
+}
+
+function showPopup(){
+    const p=document.getElementById("savePopup");
+    p.style.display="block";
+    setTimeout(()=>p.style.display="none",3000);
+}
+
+const preview=document.getElementById("preview");
+const fileInput=document.getElementById("fileInput");
+let selectedImage=null;
+
+fileInput.addEventListener("change",()=>{
+    selectedImage=fileInput.files[0];
+    preview.src=URL.createObjectURL(selectedImage);
+    preview.style.display="block";
+});
+
+let stream=null;
+
+// CAMERA OPEN (front/back)
+async function openCamera(facingMode="user"){
+    if(stream) stream.getTracks().forEach(t=>t.stop());
+    try{
+        stream=await navigator.mediaDevices.getUserMedia({ video:{ facingMode }, audio:false });
+        const video=document.getElementById("cameraPreview");
+        video.srcObject=stream;
+        video.style.display="block";
+        video.onclick=captureFromCamera;
+    }catch(err){
+        alert("Camera error: "+err.message);
+    }
+}
+
+// CAPTURE PHOTO
+function captureFromCamera(){
+    const video=document.getElementById("cameraPreview");
+    const canvas=document.getElementById("cameraCanvas");
+    canvas.width=video.videoWidth;
+    canvas.height=video.videoHeight;
+    canvas.getContext("2d").drawImage(video,0,0);
+    canvas.toBlob(blob=>{
+        selectedImage=blob;
+        preview.src=URL.createObjectURL(blob);
+        preview.style.display="block";
+    });
+    video.style.display="none";
+    if(stream) stream.getTracks().forEach(track=>track.stop());
+}
+
+// OCR PROCESS
+async function startOCR(){
+    if(!selectedImage){ alert("Upload OR capture an image first"); return; }
+    const resultBox=document.getElementById("resultBox");
+    resultBox.style.display="block";
+    resultBox.innerText="Processing...";
+    const worker = await Tesseract.createWorker();
+    await worker.load();
+    await worker.loadLanguage('eng');
+    await worker.initialize('eng');
+    const { data:{ text } } = await worker.recognize(selectedImage);
+    resultBox.innerText=text;
+    await worker.terminate();
+    saveToFirebase(text);   // save and show popup
+}
+</script>
+</body>
+</html>
